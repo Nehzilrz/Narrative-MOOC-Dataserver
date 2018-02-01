@@ -21,6 +21,7 @@ var currentGrades = null;
 var currentCourseId = null;
 var memVideoLogPeaks = {};
 
+selectCourse('HKUSTx_COMP102x_2T2014');
 async function selectCourse(courseId) {
     const ret = await courses.findOne({ originalId: courseId });
     currentCourseId = courseId;
@@ -105,7 +106,7 @@ async function getVideoLogPeaks(videoId, duration) {
 
     for (const action in actionTypes) {
         if (actionTypes[action].length > actionLengthThreshold) {
-            filteredAction[action] = actionTypes[action];
+            filteredAction[action] = algorithm.smooth(actionTypes[action]);
             filteredAction[action][0] = Math.min(filteredAction[action][0], filteredAction[action][1]);
         }
 

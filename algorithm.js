@@ -4,6 +4,7 @@ module.exports = {
     getEntropy,
     getAverage,
     removeDuplicate,
+    smooth,
 }
 
 function peakDetection(vec) {
@@ -76,6 +77,36 @@ function getAverage(input) {
         ret += input[i];
     }
     ret /= input.length;
+    return ret;
+}
+
+
+function smooth(vec, window = 3) {
+    var ret = [], tot = 0;
+    var mVec = vec[0];
+    for (var i = 1; i < window; ++i) {
+        if (vec[i] < mVec) {
+            mVec = vec[i];
+        }
+    }
+
+    for (var i = 0; i < window / 2; ++i) {
+        vec[i] = mVec;
+        tot += mVec;
+    }
+
+    for (var i = (~~(window / 2)) + 1; i < vec.length; ++i) {
+        if (i >= window) {
+            tot += vec[i];
+            tot -= vec[i - window];
+            ret.push(tot / window);
+        } else {
+            tot += mVec;
+            vec[i] = mVec;
+            ret.push(tot / (i + 1));
+        }
+    }
+
     return ret;
 }
 
