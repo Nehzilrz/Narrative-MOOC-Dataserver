@@ -1,21 +1,98 @@
 const Koa = require('koa');
 const Router = require('koa-router')
 const mongoose = require('mongoose');
-const schema = require('./schema');
-const dbUrl = 'mongodb://localhost/vismooc';
+const dbUrl = 'mongodb://localhost/NarrativeMOOCintroduceToJava';
 const cors = require('koa2-cors');
-const algorithm = require('./algorithm')
+const Schema = mongoose.Schema;
 
 const app = new Koa();
 
 mongoose.connect(dbUrl);
-const courses = mongoose.model(schema.COURSES, schema.CourseSchema);
-const users = mongoose.model(schema.USERS, schema.UserSchema);
-const videos = mongoose.model(schema.VIDEOS, schema.VideoSchema);
-const enrollments = mongoose.model(schema.ENROLLMENTS, schema.EnrollmentSchema);
-const logs = mongoose.model(schema.LOGS, schema.LogsSchema);
-const denselogs = mongoose.model(schema.DENSELOGS, schema.DenseLogsSchema);
-const socialnetwork = mongoose.model(schema.SOCIALNETWORK, schema.SocialNetworkSchema);
+
+const user_model = mongoose.model('users', new Schema({
+    user_id: String,
+    username: String,
+    name: String,
+    first_name: String,
+    last_name: String,
+    is_staff: Number,
+    is_active: Number,
+    is_superuser: Number,
+    last_login: Number,
+    date_joined: Number,
+    created_date: Number,
+    modified_date: Number,
+    created: Number,
+    status: String,
+    country: String,
+    year_of_birth: String,
+    gender: String,
+    consecutive_days_visit_count: String,
+    level_of_education: String,
+    certificate_id: String,
+    grade: Number,
+    course_id: String,
+    mode: String,
+}));
+
+const event_model = mongoose.model('events', new Schema({
+    event_type: String,
+    user_id: String,
+    module_id: String,
+    ip: String,
+    session: String,
+    event_source: String,
+    time: Number,
+}));
+
+const video_model = mongoose.model('videos', new Schema({
+    duration: Number,
+    grade_distribution: [Number],
+    average_grade: Number,
+    activeness: Number,
+    entropy: Number,
+    id: String,
+    release_date: Number,
+    peaks: Schema.Types.Mixed,
+    clickstream: Schema.Types.Mixed,
+}));
+
+const module_model = mongoose.model('modules', new Schema({
+    children: [String],
+    category: String,
+    id: String,
+    display_name: String,
+    start: String,
+    max_attempts: Number,
+    showanswer: String,
+    weight: Number,
+}));
+
+const video_activies_model = mongoose.model('video_activies', new Schema({
+    id: String,
+    user_id: String,
+    final: Number,
+    video_watch_time: Number,
+    attempts: Number,
+    created: Number,
+    modified: Number,
+    saved_video_position: String
+}));
+
+const problem_activies_model = mongoose.model('problem_activies', new Schema({
+    id: String,
+    user_id: String,
+    grade: Number,
+    max_grade: Number,
+    final: Number,
+    weight: Number,
+    video_watch_time: Number,
+    attempts: Number,
+    created: Number,
+    modified: Number,
+    last_submission_time: Number,
+    student_answers: Schema.Types.Mixed,
+}));
 
 var currentGrades = null;
 var currentCourseId = null;
@@ -65,23 +142,6 @@ async function getVideoLogPeaks(videoId, duration) {
             const type = click.type;
             const userId = click.userId;
             const currentTime = ~~(click.currentTime || click.oldTime);
-
-            if (type == 'show_transcript' || type == 'hide_transcript' || type == 'stop_video') {
-                continue;
-            }
-            if (currentTime < 0 || currentTime > duration - 5 || currentGrades[userId] == 0) {
-                continue;
-            }
-
-            if (!actionTypes[type]) {
-                actionTypes[type] = [];
-            }
-            while (actionTypes[type].length <= currentTime) {
-                actionTypes[type].push(0);
-            }
-            while (sortedClick.length <= currentTime) {
-                sortedClick.push([]);
-            }
 
             if (userFilter[userId + type] != currentTime) {
                 actionTypes[type][currentTime] += 1;
@@ -150,17 +210,14 @@ async function getVideoLogPeaks(videoId, duration) {
     return memVideoLogPeaks[videoId];
 }
 
-const courseRoutes = new Router();
-courseRoutes.get("/getCourseList", async ctx => {
+const Routers = new Router();
+Routers.get("/getCourseList", async ctx => {
     const ret = await courses.find({}).select("_id originalId url startDate endDate name org courseImageUrl instructor");
     ctx.body = ret;
 }).get("/selectCourse", async ctx => {
     await selectCourse(ctx.query.courseId);
     ctx.body = true;
-});
-
-const videoRoutes = new Router();
-videoRoutes.get("/getVideoList", async ctx => {
+}).get("/getVideoList", async ctx => {
     const course = await courses.findOne({
         originalId: ctx.query.courseId
     });
@@ -168,7 +225,7 @@ videoRoutes.get("/getVideoList", async ctx => {
     for (var i = 0; i < course.videoIds.length; ++i) {
         var id = course.videoIds[i];
         try {
-            const t = await videos.findOne({ originalId: id });
+            const t = await video_model.findOne({ originalId: id });
             ret.push(t);
         } catch (e) {
 
@@ -176,7 +233,7 @@ videoRoutes.get("/getVideoList", async ctx => {
     }
     ctx.body = ret;
 }).get("/getVideoInfo", async ctx => {
-    const ret = await videos.find({
+    const ret = await video_model.find({
         originalId: ctx.query.videoId
     });
     ctx.body = ret;
@@ -186,7 +243,7 @@ videoRoutes.get("/getVideoList", async ctx => {
     });
     var ret = [];
     for (const videoId of course.videoIds) {
-        const videoDuration = (await videos.findOne({ originalId: videoId })).duration;
+        const videoDuration = (await video_model.findOne({ originalId: videoId })).duration;
         const t = (await getVideoLogPeaks(videoId, videoDuration));
         ret.push({ id: videoId, logs: t.logs, info: t.info });
     }
@@ -197,7 +254,7 @@ videoRoutes.get("/getVideoList", async ctx => {
     });
     var ret = [];
     for (const videoId of course.videoIds) {
-        const videoDuration = (await videos.findOne({ originalId: videoId })).duration;
+        const videoDuration = (await video_model.findOne({ originalId: videoId })).duration;
         const peaks = (await getVideoLogPeaks(videoId, videoDuration)).peaks;
         for (const action in peaks) {
             for (const peak of peaks[action]) {
@@ -209,26 +266,21 @@ videoRoutes.get("/getVideoList", async ctx => {
     ctx.body = ret;
 }).get("/getVideoLogs", async ctx => {
     const videoId = ctx.query.videoId;
-    const videoDuration = (await videos.findOne({ originalId: videoId })).duration;
+    const videoDuration = (await video_model.findOne({ originalId: videoId })).duration;
     const t = (await getVideoLogPeaks(videoId, videoDuration));
     ctx.body = { id: videoId, logs: t.logs, info: t.info }
 }).get("/getVideoPeaks", async ctx => {
     const videoId = ctx.query.videoId;
-    const videoDuration = (await videos.findOne({ originalId: videoId })).duration;
+    const videoDuration = (await video_model.findOne({ originalId: videoId })).duration;
     const peaks = (await getVideoLogPeaks(videoId, videoDuration)).peaks;
     ctx.body = { id: videoId, peaks }
-});
-
-const logRoutes = new Router();
-logRoutes.get("/getVideoLog", async ctx => {    
+}).get("/getVideoLog", async ctx => {    
     const videoId = ctx.query.videoId;
-    const videoDuration = (await videos.findOne({ originalId: ctx.query.videoId })).duration;
+    const videoDuration = (await video_model.findOne({ originalId: ctx.query.videoId })).duration;
     const ret = await getVideoLogPeaks(ctx.query.videoId, videoDuration);
     ctx.body = ret;
 });
 app.use(cors());
-app.use(courseRoutes.routes());
-app.use(videoRoutes.routes());
-app.use(logRoutes.routes());
+app.use(Routers.routes());
 
 app.listen(3000);
