@@ -7,7 +7,9 @@ const Schema = mongoose.Schema;
 
 const app = new Koa();
 
-mongoose.connect(dbUrl);
+mongoose.connect(dbUrl, {
+    useMongoClient: true
+});
 
 const user_model = mongoose.model('users', new Schema({
     user_id: String,
@@ -94,192 +96,139 @@ const problem_activies_model = mongoose.model('problem_activies', new Schema({
     student_answers: Schema.Types.Mixed,
 }));
 
-var currentGrades = null;
-var currentCourseId = null;
-var memVideoLogPeaks = {};
-
-selectCourse('HKUSTx_COMP102x_2T2014');
-async function selectCourse(courseId) {
-    const ret = await courses.findOne({ originalId: courseId });
-    currentCourseId = courseId;
-    currentGrades = ret.grades;
-    var maxGrade = 0;
-    for (const user in currentGrades) {
-        if (currentGrades[user] > maxGrade) {
-            maxGrade = currentGrades[user];
-        }
+function array_is_uniform(vec) {
+    const mean = vec.reduce((a, b) => a + b, 0) / vec.length;
+    var counter = 0;
+    for (const x of vec) {
+        if (x * 10 < mean) counter += 1;
     }
-
-    for (const user in currentGrades) {
-        currentGrades[user] = ~~(currentGrades[user] * 100 / maxGrade);
-    }
-    return ret;
+    return counter * 2 < vec.length;
 }
 
-async function getVideoLogPeaks(videoId, duration) {
-    if (memVideoLogPeaks[videoId] != null) {
-        return memVideoLogPeaks[videoId];
-    }
-
-    const denselogsRet = await denselogs.find({
-        videoId: videoId
+function array_smooth(vec) {
+    const mean = vec.reduce((a, b) => a + b, 0) / vec.length;
+    vec = vec.map((d) => Math.min(d, mean * 3));
+    return vec.map((d, i) => {
+        if (i == 0 || i == vec.length - 1) return d;
+        else return (d + vec[i - 1] + vec[i + 1]) / 3;
     });
-    const sortedClick = [];
-    const actionTypes = {};
+}
 
-    const userFilter = {};
-    const userSet = {};
-    const videoUserGrades = [];
-
-    var courseId = denselogsRet.length > 0 ? denselogsRet[0].courseId : null;
-    if (courseId && courseId != currentCourseId) {
-        currentCourseId = courseId;
-        await selectCourse(courseId);
+const cachedVideoLogs = {};
+async function getVideoLogs(videoId) {
+    if (cachedVideoLogs[videoId] != null) {
+        return cachedVideoLogs[videoId];
     }
-    
-    for (const denselog of denselogsRet) {
-        for (const click of denselog.clicks) {
-            const type = click.type;
-            const userId = click.userId;
-            const currentTime = ~~(click.currentTime || click.oldTime);
+    const video = await video_model.findOne({ id: videoId });
+    cachedVideoLogs[videoId] = Object.keys(video.clickstream)
+        .filter((d) => array_is_uniform(video.clickstream[d]))
+        .map((d) => ({
+            type: d,
+            data: array_smooth(video.clickstream[d]),
+        }));
+    return cachedVideoLogs[videoId];
+}
 
-            if (userFilter[userId + type] != currentTime) {
-                actionTypes[type][currentTime] += 1;
-                sortedClick[currentTime].push(click);
-                userFilter[userId + type] = currentTime;
-            }
-            if (!userSet[userId]) {
-                userSet[userId] = currentGrades[userId];
-                videoUserGrades.push(currentGrades[userId]);
-            }
-        }
+const cachedVideoPeaks = {};
+async function getVideoPeaks(videoId) {
+    if (cachedVideoPeaks[videoId] != null) {
+        return cachedVideoPeaks[videoId];
     }
-    const entropyAndDistribution = algorithm.getEntropy(videoUserGrades);
-    const videoEntropy = entropyAndDistribution[0];
-    const videoGradeDistribution = entropyAndDistribution[1];
-    const videoGrade = algorithm.getAverage(videoUserGrades);
 
-    const actionLengthThreshold = 30;
-    const actionCountThreshold = duration * 5;
-    const peaks = {};
-    const filteredAction = {};
+    const video = await video_model.findOne({ id: videoId });
+    const video_peaks = [];
 
-    for (const action in actionTypes) {
-        if (actionTypes[action].length > actionLengthThreshold) {
-            filteredAction[action] = algorithm.smooth(actionTypes[action]);
-            filteredAction[action][0] = Math.min(filteredAction[action][0], filteredAction[action][1]);
-        }
-
-        if (actionTypes[action].length > actionLengthThreshold &&
-            actionTypes[action].reduce((a, b) => a + b, 0) > actionCountThreshold) {
-            peaks[action] = algorithm.peakDetection(actionTypes[action]);
-            for (const peak of peaks[action]) {
-                peak.users = [];
-                for (var i = Math.max(0, peak.start - 2);
-                        i <= Math.min(sortedClick.length - 1, peak.end + 2); ++i) {
-                    for (const click of sortedClick[i]) {
-                        if (click.type == action && currentGrades[click.userId] > 0) {
-                            peak.users.push(click.userId);
-                        }
-                    }
-                }
-                peak.users = algorithm.removeDuplicate(peak.users);
-                const peakUserGrades = peak.users.map((user) => currentGrades[user]);
-                const peakDistribution = algorithm.getEntropy(peakUserGrades);
-                const peakEntropy = peakDistribution[0];
-                peak.entropyDelta = videoEntropy - peakEntropy;
-                peak.avgGrade = algorithm.getAverage(peakUserGrades);
-                peak.num = peak.users.length;
-                peak.videoId = videoId;
-                peak.action = action;
-                peak.gradeDistribution = peakDistribution[1];
-            }
+    for (const action in video.peaks) {
+        for (const peak of video.peaks[action]) {
+            video_peaks.push({
+                action: action,
+                index: video_peaks.length,
+                entropy_delta: peak.entropy - video.entropy,
+                start: peak.start,
+                end: peak.end,
+                length: peak.length,
+                activeness: peak.activeness,
+                average_grade: peak.average_grade * 100,
+                grade_distribution: peak.grade_distribution,
+                entropy: peak.entropy,
+            })
         }
     }
 
-
-    memVideoLogPeaks[videoId] = {
-        info: {
-            entropy: videoEntropy,
-            avgGrade: videoGrade,
-            gradeDistribution: videoGradeDistribution,
-        },
-        logs: filteredAction,
-        peaks: peaks,
-    }
-    return memVideoLogPeaks[videoId];
+    cachedVideoPeaks[videoId] = video_peaks;
+    return cachedVideoPeaks[videoId];
 }
 
 const Routers = new Router();
 Routers.get("/getCourseList", async ctx => {
-    const ret = await courses.find({}).select("_id originalId url startDate endDate name org courseImageUrl instructor");
-    ctx.body = ret;
-}).get("/selectCourse", async ctx => {
-    await selectCourse(ctx.query.courseId);
-    ctx.body = true;
+    ctx.body = [];
 }).get("/getVideoList", async ctx => {
-    const course = await courses.findOne({
-        originalId: ctx.query.courseId
-    });
-    const ret = [];
-    for (var i = 0; i < course.videoIds.length; ++i) {
-        var id = course.videoIds[i];
-        try {
-            const t = await video_model.findOne({ originalId: id });
-            ret.push(t);
-        } catch (e) {
-
+    const videos = await module_model.find({ category: 'video' });
+    let ret = [];
+    for (const v of videos) {
+        const info = await video_model.findOne({ id : v.id })
+            .select('duration grade_distribution average_grade activeness entropy release_date');
+        if (!info || info.activeness == 0) {
+            continue;
         }
+        ret.push({
+            name: v.display_name,
+            html5_sources: v.html5_sources,
+            id: v.id,
+            sub: v.sub,
+            duration: info.duration,
+            grade_distribution: info.grade_distribution,
+            average_grade: info.average_grade * 100,
+            activeness: info.activeness.action,
+            entropy: info.entropy,
+            release_date: info.release_date * 1000,
+        });
     }
-    ctx.body = ret;
-}).get("/getVideoInfo", async ctx => {
-    const ret = await video_model.find({
-        originalId: ctx.query.videoId
-    });
-    ctx.body = ret;
-}).get("/getCourseLogs", async ctx => {
-    const course = await courses.findOne({
-        originalId: ctx.query.courseId
-    });
-    var ret = [];
-    for (const videoId of course.videoIds) {
-        const videoDuration = (await video_model.findOne({ originalId: videoId })).duration;
-        const t = (await getVideoLogPeaks(videoId, videoDuration));
-        ret.push({ id: videoId, logs: t.logs, info: t.info });
-    }
-    ctx.body = ret;
-}).get("/getCoursePeaks", async ctx => {
-    const course = await courses.findOne({
-        originalId: ctx.query.courseId
-    });
-    var ret = [];
-    for (const videoId of course.videoIds) {
-        const videoDuration = (await video_model.findOne({ originalId: videoId })).duration;
-        const peaks = (await getVideoLogPeaks(videoId, videoDuration)).peaks;
-        for (const action in peaks) {
-            for (const peak of peaks[action]) {
-                ret.push(peak);
-            }
-        }
-    }
-    ret = ret.sort((a, b) => b.entropyDelta - a.entropyDelta);
-    ctx.body = ret;
+    ctx.body = ret.sort((a, b) => a.name > b.name ? 1 : -1);
+}).get("/getProblemList", async ctx => {
+    const problems = await module_model.find({ category: 'problem' });
+    ctx.body = problems.map(p => ({
+        id: p.id,
+        name: p.display_name,
+        max_attempts: p.max_attempts,
+        showanswer: p.showanswer,
+        submission_wait_seconds: p.submission_wait_seconds,
+        weight: p.weight,
+    })).sort((a, b) => a.name > b.name ? 1 : -1);
+}).get("/getChapterList", async ctx => {
+    const chapters = await module_model.find({ category: 'chapter' });
+    ctx.body = chapters.map(c => ({
+        name: c.display_name,
+        id: c.id,
+        start: +(new Date(c.start)),
+        problems: c.children.filter(d => d.indexOf('problem') != -1),
+        videos: c.children.filter(d => d.indexOf('video') != -1),
+    })).sort((a, b) => a.start - b.start);
 }).get("/getVideoLogs", async ctx => {
     const videoId = ctx.query.videoId;
-    const videoDuration = (await video_model.findOne({ originalId: videoId })).duration;
-    const t = (await getVideoLogPeaks(videoId, videoDuration));
-    ctx.body = { id: videoId, logs: t.logs, info: t.info }
+    const clickstream = await getVideoLogs(videoId);
+    ctx.body = clickstream;
 }).get("/getVideoPeaks", async ctx => {
     const videoId = ctx.query.videoId;
-    const videoDuration = (await video_model.findOne({ originalId: videoId })).duration;
-    const peaks = (await getVideoLogPeaks(videoId, videoDuration)).peaks;
-    ctx.body = { id: videoId, peaks }
-}).get("/getVideoLog", async ctx => {    
-    const videoId = ctx.query.videoId;
-    const videoDuration = (await video_model.findOne({ originalId: ctx.query.videoId })).duration;
-    const ret = await getVideoLogPeaks(ctx.query.videoId, videoDuration);
-    ctx.body = ret;
+    const peaks = await getVideoPeaks(videoId);
+    ctx.body = peaks;
+}).get("/getProblemActivies", async ctx => {
+    const activies = await problem_activies_model.find({ id: ctx.query.id });
+    ctx.body = activies.map(d => ({
+        id: d.id,
+        user_id: d.user_id,
+        grade: d.grade,
+        max_grade: d.max_grade,
+        final: d.final * 100,
+        weight: d.weight,
+        video_watch_time: d.video_watch_time,
+        attempts: d.attempts,
+        created: d.created * 1000,
+        modified: d.modified * 1000,
+        last_submission_time: d.last_submission_time * 1000,
+    }));
 });
+
 app.use(cors());
 app.use(Routers.routes());
 
