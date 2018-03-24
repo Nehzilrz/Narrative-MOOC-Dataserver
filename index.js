@@ -164,6 +164,7 @@ function array_smooth(vec) {
 
 const cachedVideoLogs = {};
 let total_user_number = 0;
+const id2users = [null];
 
 async function getVideoLogs(videoId) {
     if (cachedVideoLogs[videoId] != null) {
@@ -228,7 +229,7 @@ async function getVideoPeaks(videoId) {
         }
     }
 
-//     video_peaks = video_peaks.sort((a, b) => a.significiant - b.significiant).slice(0, 15);
+    video_peaks = video_peaks.sort((a, b) => a.significiant - b.significiant).slice(0, 10);
     video_peaks = video_peaks.sort((a, b) => a.start - b.start);
     video_peaks = video_peaks.filter((d, i) => !i || d.start > video_peaks[i - 1].end + 5);
     cachedVideoPeaks[videoId] = video_peaks.sort((a, b) => a.entropy - b.entropy);
@@ -334,160 +335,6 @@ APIGetRouters.get("/getVideoLogs", async ctx => {
     const videoId = ctx.query.videoId;
     const peaks = await getVideoPeaks(videoId);
     ctx.body = peaks;
-});
-
-const APIPostRouters = new Router();
-APIPostRouters.get("/getProblemActivies", async ctx => {
-    const activies = await problem_activies_model.find({ id: ctx.query.id });
-    ctx.body = activies.map(d => ({
-        id: d.id,
-        user_id: d.user_id,
-        video_watch_time: d.video_watch_time,
-        grade: d.grade,
-        max_grade: d.max_grade,
-        final: d.final * 100,
-        weight: d.weight,
-        attempts: d.attempts,
-        
-        created: d.created * 1000,
-        modified: d.modified * 1000,
-        last_submission_time: d.last_submission_time * 1000,
-    }));
-}).post("/getProblemsData", async ctx => {
-    const problems = ctx.request.body.problems;
-    const users = ctx.request.body.users;
-    let user_number = (users && users.length);
-    let chapter_id = ctx.request.body.chapter;
-    const chapter = course_chapters.find((d) => d.id == chapter_id);
-    const condition = {};
-    condition[`video_watch_times.${chapter.index}`] = {$gt: 0};
-    const start_time = (new Date(chapter.start)) / 1000;
-    const end_time = start_time + 86400 * 7;
-
-    if (!user_number) {
-        user_number = await user_model.count(condition);
-    }
-    const ret = [];
-    for (const pid of problems) {
-        const activies = problem_activies_cache[pid] ?
-        problem_activies_cache[pid] :
-        (problem_activies_cache[pid] = await problem_activies_model.find({ id: pid }));
-        const problem = await module_model.findOne({ id: pid });
-        if (activies.length == 0) {
-            continue;
-        }
-        let average_grade = 0;
-        let average_correctness = 0;
-        let average_final = 0;
-        let average_created = 0;
-        let average_modified = 0;
-        let average_duration = 0;
-        let average_attempts = 0;
-        let average_completeness = 0;
-        for (const x of activies) {
-            average_grade += x.grade;
-            average_correctness += x.grade / x.max_grade;
-            average_final += x.final || 0;
-            average_created += x.created * 1000;
-            average_modified += x.modified * 1000;
-            average_duration += (x.modified - x.created) * 1000;
-            average_attempts += x.attempts || 0;
-            average_completeness += (x.attempts || 0) >= 1;
-        }
-        average_grade /= user_number;
-        average_correctness /= activies.length;
-        average_final /= user_number;
-        average_created /= activies.length;
-        average_modified /= activies.length;
-        average_duration /= user_number;
-        average_attempts /= user_number;
-        average_completeness /= user_number;
-        ret.push({
-            id: pid,
-            correctness: average_correctness,
-            grade: average_grade,
-            max_grade: activies[0].max_grade,
-            final: average_final,
-            attempts: average_attempts,
-            name: problem.display_name,
-            max_attempts: problem.max_attempts,
-            weight: problem.weight,
-            created: average_created,
-            modified: average_modified,
-            duration: average_duration,
-            activeness: activies.length,
-            completeness: average_completeness,
-        });
-    }
-    const max_duration = Math.max(...ret.map(d => d.duration));
-    const max_activeness =  Math.max(...ret.map(d => d.activeness));
-    ret.forEach(d => d.work_time = 
-        (d.activeness / max_activeness) * 
-        (d.duration / max_duration) * d.attempts * (d.max_grade / d.grade) * 200,
-    );
-    ctx.body = ret;
-}).post("/getVideosData", async ctx => {
-    const videos = ctx.request.body.videos;
-    const users = ctx.request.body.users;
-    let user_number = (users && users.length);
-    let chapter_id = ctx.request.body.chapter;
-    const chapter = course_chapters.find((d) => d.id == chapter_id);
-    const condition = {};
-    condition[`video_watch_times.${chapter.index}`] = {$gt: 0};
-    const start_time = (new Date(chapter.start)) / 1000;
-    const end_time = start_time + 86400 * 7;
-
-    if (!user_number) {
-        user_number = await user_model.count(condition);
-    }
-    const ret = [];
-    for (const vid of videos) {
-        const activies = video_activies_cache[vid] ?
-        video_activies_cache[vid] :
-        (video_activies_cache[vid] = await video_activies_model.find({ id: vid }));
-        const video = await module_model.findOne({ id: vid });
-        const duration = (await video_model.findOne({ id: vid }).select("duration") || {}).duration || 60;
-        if (activies.length == 0) {
-            continue;
-        }
-        let average_final = 0;
-        let average_created = 0;
-        let average_modified = 0;
-        let average_attempts = 0;
-        let average_video_watch_time = 0;
-        let average_completeness = 0;
-        for (const x of activies) {
-            average_final += x.final || 0;
-            average_created += x.created * 1000;
-            average_modified += x.modified * 1000;
-            const times = (x.events || [])
-                .filter(d => d.start >= start_time && d.start <= end_time)
-                .map(d => d.length);
-            average_attempts += times.length;
-            const tot_time = times.reduce((a, b) => a + b, 0);
-            average_video_watch_time += tot_time;
-            average_completeness += Math.min(1, tot_time / duration);
-            // average_completeness += tot_time > duration * 0.6;
-        }
-        average_final /= user_number;
-        average_created /= activies.length;
-        average_modified /= activies.length;
-        average_attempts /= user_number;
-        average_video_watch_time /= user_number;
-        average_completeness /= user_number;
-        ret.push({
-            id: vid,
-            final: average_final,
-            video_watch_time: average_video_watch_time,
-            attempts: average_attempts,
-            name: video.display_name,
-            created: average_created,
-            modified: average_modified,
-            activeness: activies.length,
-            completeness: average_completeness,
-        });
-    }
-    ctx.body = ret;
 }).get("/countEvent", async ctx => {
     const query = {};
     if (ctx.query.event_type) {
@@ -517,8 +364,173 @@ APIPostRouters.get("/getProblemActivies", async ctx => {
         });
     }
     ctx.body = ret;
+});
+
+const APIPostRouters = new Router();
+APIPostRouters.get("/getProblemActivies", async ctx => {
+    const activies = await problem_activies_model.find({ id: ctx.query.id });
+    ctx.body = activies.map(d => ({
+        id: d.id,
+        user_id: d.user_id,
+        video_watch_time: d.video_watch_time,
+        grade: d.grade,
+        max_grade: d.max_grade,
+        final: d.final * 100,
+        weight: d.weight,
+        attempts: d.attempts,
+        
+        created: d.created * 1000,
+        modified: d.modified * 1000,
+        last_submission_time: d.last_submission_time * 1000,
+    }));
+}).post("/getProblemsData", async ctx => {
+    const problems = ctx.request.body.problems;
+    const users = ctx.request.body.users;
+    const user_ids = ctx.request.body.users;
+    const user_set = new Set(user_ids);
+    const user_allowed = (id) => user_ids ? user_set.has(id) : true;
+    let user_number = (users && users.length);
+    let chapter_id = ctx.request.body.chapter;
+    const chapter = course_chapters.find((d) => d.id == chapter_id);
+    const condition = {};
+    condition[`video_watch_times.${chapter.index}`] = {$gt: 0};
+    const start_time = (new Date(chapter.start)) / 1000;
+    const end_time = start_time + 86400 * 7;
+
+    const ret = [];
+    for (const pid of problems) {
+        const activies = problem_activies_cache[pid] ?
+        problem_activies_cache[pid] :
+        (problem_activies_cache[pid] = await problem_activies_model.find({ id: pid }));
+        const problem = await module_model.findOne({ id: pid });
+        if (activies.length == 0) {
+            continue;
+        }
+        let average_grade = 0;
+        let average_correctness = 0;
+        let average_final = 0;
+        let average_created = 0;
+        let average_modified = 0;
+        let average_duration = 0;
+        let average_attempts = 0;
+        let average_completeness = 0;
+        let user_number = 0;
+        for (const x of activies) {
+            if (!user_allowed(x.user_id)) continue;
+            user_number += 1;
+            average_grade += x.grade;
+            average_correctness += x.grade / x.max_grade;
+            average_final += x.final || 0;
+            average_created += x.created * 1000;
+            average_modified += x.modified * 1000;
+            average_duration += (x.modified - x.created) * 1000;
+            average_attempts += x.attempts || 0;
+            average_completeness += (x.attempts || 0) >= 1;
+        }
+        if (user_number == 0) continue;
+        average_grade /= user_number;
+        average_correctness /= user_number;
+        average_final /= user_number;
+        average_created /= user_number;
+        average_modified /= user_number;
+        average_duration /= user_number;
+        average_attempts /= user_number;
+        average_completeness /= user_number;
+        ret.push({
+            id: pid,
+            correctness: average_correctness,
+            grade: average_grade,
+            max_grade: activies[0].max_grade,
+            final: average_final,
+            attempts: average_attempts,
+            name: problem.display_name,
+            max_attempts: problem.max_attempts,
+            weight: problem.weight,
+            created: average_created,
+            modified: average_modified,
+            duration: average_duration,
+            activeness: user_number,
+            completeness: average_completeness,
+        });
+    }
+    const max_duration = Math.max(...ret.map(d => d.duration));
+    const max_activeness =  Math.max(...ret.map(d => d.activeness));
+    ret.forEach(d => d.work_time = 
+        (d.activeness / max_activeness) * 
+        (d.duration / max_duration) * d.attempts * (d.max_grade / d.grade) * 200,
+    );
+    ctx.body = ret;
+}).post("/getVideosData", async ctx => {
+    const videos = ctx.request.body.videos;
+    const users = ctx.request.body.users;
+    const user_ids = ctx.request.body.users;
+    const user_set = new Set(user_ids);
+    const user_allowed = (id) => user_ids ? user_set.has(id) : true;
+    let user_number = (users && users.length);
+    let chapter_id = ctx.request.body.chapter;
+    const chapter = course_chapters.find((d) => d.id == chapter_id);
+    const condition = {};
+    condition[`video_watch_times.${chapter.index}`] = {$gt: 0};
+    const start_time = (new Date(chapter.start)) / 1000;
+    const end_time = start_time + 86400 * 7;
+
+    const ret = [];
+    for (const vid of videos) {
+        const activies = video_activies_cache[vid] ?
+        video_activies_cache[vid] :
+        (video_activies_cache[vid] = await video_activies_model.find({ id: vid }));
+        const video = await module_model.findOne({ id: vid });
+        const duration = (await video_model.findOne({ id: vid }).select("duration") || {}).duration || 60;
+        if (activies.length == 0) {
+            continue;
+        }
+        let average_final = 0;
+        let average_created = 0;
+        let average_modified = 0;
+        let average_attempts = 0;
+        let average_video_watch_time = 0;
+        let average_completeness = 0;
+        let user_number = 0;
+        for (const x of activies) {
+            if (!user_allowed(x.user_id)) continue;
+            user_number += 1;
+            average_final += x.final || 0;
+            average_created += x.created * 1000;
+            average_modified += x.modified * 1000;
+            const times = (x.events || [])
+                .filter(d => d.start >= start_time && d.start <= end_time)
+                .map(d => d.length);
+            average_attempts += times.length;
+            const tot_time = times.reduce((a, b) => a + b, 0);
+            average_video_watch_time += tot_time;
+            average_completeness += Math.min(1, tot_time / duration);
+            // average_completeness += tot_time > duration * 0.6;
+        }
+        if (user_number == 0) continue;
+        average_final /= user_number;
+        average_created /= user_number;
+        average_modified /= user_number;
+        average_attempts /= user_number;
+        average_video_watch_time /= user_number;
+        average_completeness /= user_number;
+        ret.push({
+            id: vid,
+            final: average_final,
+            video_watch_time: average_video_watch_time,
+            attempts: average_attempts,
+            name: video.display_name,
+            created: average_created,
+            modified: average_modified,
+            activeness: user_number,
+            completeness: average_completeness,
+        });
+    }
+    ctx.body = ret;
 }).post("/getVideoActiviesDistribution", async ctx => {
     let ret = [];
+    const user_ids = ctx.request.body.users;
+    const user_set = new Set(user_ids);
+    const user_allowed = (id) => user_ids ? user_set.has(id) : true;
     let chapter_id = ctx.request.body.chapter;
     const chapter = course_chapters.find((d) => d.id == chapter_id);
     if (chapter) {
@@ -539,6 +551,7 @@ APIPostRouters.get("/getProblemActivies", async ctx => {
         }
         const video_access_records = {};
         for (const user of users) {
+            if (!user_allowed(user.user_id)) continue;
             const events = user.events.filter((d => d.start >= start_time && d.start <= end_time));
             const access_records = {};
             for (const event of events) {
@@ -582,6 +595,9 @@ APIPostRouters.get("/getProblemActivies", async ctx => {
     ctx.body = ret.sort((a, b) => b.activeness - a.activeness);
 }).post("/getProblemGradesDistribution", async ctx => {
     let ret = [];
+    const user_ids = ctx.request.body.users;
+    const user_set = new Set(user_ids);
+    const user_allowed = (id) => user_ids ? user_set.has(id) : true;
     let chapter_id = ctx.request.body.chapter;
     const chapter = course_chapters.find((d) => d.id == chapter_id);
     if (chapter) {
@@ -603,6 +619,7 @@ APIPostRouters.get("/getProblemActivies", async ctx => {
         }
         const video_access_records = {};
         for (const user of users) {
+            if (!user_allowed(user.user_id)) continue;
             const events = user.events.filter((d => d.start >= start_time && d.start <= end_time));
             const access_records = {};
             for (const event of events) {
@@ -646,6 +663,9 @@ APIPostRouters.get("/getProblemActivies", async ctx => {
     ctx.body = ret.sort((a, b) => b.activeness - a.activeness);
 }).post("/getChapterVideosInfo", async ctx => {
     let ret = [];
+    const user_ids = ctx.request.body.users;
+    const user_set = new Set(user_ids);
+    const user_allowed = (id) => user_ids ? user_set.has(id) : true;
     let chapter_id = ctx.request.body.chapter;
     const chapter = course_chapters.find((d) => d.id == chapter_id);
     const allvideos = course_modules.filter(d => d.category == 'video').map((d) => d.id);
@@ -663,6 +683,7 @@ APIPostRouters.get("/getProblemActivies", async ctx => {
         const records = {};
         for (let i = 0; i < users.length; ++i) {
             const user = users[i];
+            if (!user_allowed(user.user_id)) continue;
             const events = user.events.filter((d => d.start >= start_time && d.start <= end_time));
             for (const event of events) {
                 if (!records[event.module]) {
@@ -693,6 +714,9 @@ APIPostRouters.get("/getProblemActivies", async ctx => {
     ctx.body = ret.sort((a, b) => a.id > b.id ? 1 : -1);
 }).post("/getChapterProblemsInfo", async ctx => {
     let ret = [];
+    const user_ids = ctx.request.body.users;
+    const user_set = new Set(user_ids);
+    const user_allowed = (id) => user_ids ? user_set.has(id) : true;
     let chapter_id = ctx.request.body.chapter;
     const chapter = course_chapters.find((d) => d.id == chapter_id);
     const problems = course_modules.filter(d => 
@@ -709,6 +733,7 @@ APIPostRouters.get("/getProblemActivies", async ctx => {
         const records = {};
         for (let i = 0; i < users.length; ++i) {
             const user = users[i];
+            if (!user_allowed(user.user_id)) continue;
             for (const index of problems) {
                 if (!records[index]) {
                     records[index] = [0, 0, 0, 0, 0];
@@ -737,27 +762,85 @@ APIPostRouters.get("/getProblemActivies", async ctx => {
     }
     ctx.body = ret.sort((a, b) => a.id > b.id ? 1 : -1);
 }).post("/getUserBasicInfo", async ctx => {
-    const users = ctx.request.body.users;
-    const ret = [];
-    for (const uid of users) {
-        const user = await user_model_old.findOne({ originalId: uid }).select(
-            "educationLevel birthDate gender country"
+    const userset = ctx.request.body.users;
+    const users = [];
+    for (const uid of userset) {
+        const user = await user_model.findOne({ user_id: uid }).select(
+            "level_of_education year_of_birth gender country"
         );
         if (!user) {
             continue;
         }
-
-        ret.push({
+        users.push({
             user_id: uid,
-            level_of_education: user.educationLevel,
-            year_of_birth: user.birthDate,
+            level_of_education: user.level_of_education,
+            year_of_birth: user.year_of_birth,
             gender: user.gender,
             country: user.country,
         });
     }
-    ctx.body = ret;
+
+    var education_dict = {};
+    for (const user of users) {
+        if (!education_dict[user.level_of_education]) {
+            education_dict[user.level_of_education] = [];
+        }
+        education_dict[user.level_of_education].push(user.user_id);
+    }
+    var education_level_map = {
+        hs: 'High School',
+        a: 'Adult',
+        b: 'Bachelor',
+        m: 'Master or Above',
+        other: 'Other',
+    };
+    var education_data = Object.keys(education_dict)
+        .map(d => ({ name: education_level_map[d] || '', val: education_dict[d] }))
+        .filter(d => d.name != "")
+        .sort((a, b) => b.val.length - a.val.length);
+
+    var gender_dict = {};
+    for (const user of users) {
+        if (!gender_dict[user.gender]) {
+            gender_dict[user.gender] = [];
+        }
+        gender_dict[user.gender].push(user.user_id);
+    }
+    var gender_map = {
+        f: 'Female',
+        m: 'Male',
+    };
+    var gender_data = Object.keys(gender_dict)
+        .map(d => ({ name: gender_map[d] || '', val: gender_dict[d] }))
+        .filter(d => d.name != "")
+        .sort((a, b) => b.val.length - a.val.length);
+    
+    var age_dict = {};
+    for (const user of users) {
+        var i = ~~((2014 - (+user.year_of_birth)) / 10);
+        if (i > 5) i = 5;
+        if (!age_dict[i]) {
+            age_dict[i] = [];
+        }
+        age_dict[i].push(user.user_id);
+    }
+    var age_data = [0, 1, 2, 3, 4, 5]
+        .map(d => ({
+            name: `${d * 10} - ` + (d == 5 ? '' : `${d * 10 + 10}`), 
+            val: age_dict[d] || []
+        }));
+        
+    ctx.body = {
+        age: age_data,
+        gender: gender_data,
+        education: education_data,
+        users: users,
+    };
 }).post("/getForumThreadMostReplied", async ctx => {
     let chapter_id = ctx.request.body.chapter;
+    const user_ids = ctx.request.body.users;
+    const user_set = new Set(user_ids);
+    const user_allowed = (id) => user_ids ? user_set.has(id) : true;
     const chapter = course_chapters.find((d) => d.id == chapter_id);
     const start_time = (new Date(chapter.start)) / 1000;
     const end_time = start_time + 86400 * 7;
@@ -766,6 +849,9 @@ APIPostRouters.get("/getProblemActivies", async ctx => {
     ctx.body = threads.slice(0, 3);
 }).post("/getForumUserMostActive", async ctx => {
     let chapter_id = ctx.request.body.chapter;
+    const user_ids = ctx.request.body.users;
+    const user_set = new Set(user_ids);
+    const user_allowed = (id) => user_ids ? user_set.has(id) : true;
     const chapter = course_chapters.find((d) => d.id == chapter_id);
     const start_time = (new Date(chapter.start)) / 1000;
     const end_time = start_time + 86400 * 7;
@@ -780,6 +866,9 @@ APIPostRouters.get("/getProblemActivies", async ctx => {
     ctx.body = users;
 }).post("/getForumThreadProblemRelated", async ctx => {
     let chapter_id = ctx.request.body.chapter;
+    const user_ids = ctx.request.body.users;
+    const user_set = new Set(user_ids);
+    const user_allowed = (id) => user_ids ? user_set.has(id) : true;
     const chapter = course_chapters.find((d) => d.id == chapter_id);
     const start_time = (new Date(chapter.start)) / 1000;
     const end_time = start_time + 86400 * 7;
@@ -809,6 +898,9 @@ APIPostRouters.get("/getProblemActivies", async ctx => {
     ctx.body = ret;
 }).post("/getForumThreadVideoRelated", async ctx => {
     let chapter_id = ctx.request.body.chapter;
+    const user_ids = ctx.request.body.users;
+    const user_set = new Set(user_ids);
+    const user_allowed = (id) => user_ids ? user_set.has(id) : true;
     const chapter = course_chapters.find((d) => d.id == chapter_id);
     const start_time = (new Date(chapter.start)) / 1000;
     const end_time = start_time + 86400 * 7;
@@ -838,6 +930,9 @@ APIPostRouters.get("/getProblemActivies", async ctx => {
     ctx.body = ret;
 }).post("/getMostDiscussedThreads", async ctx => {
     let chapter_id = ctx.request.body.chapter;
+    const user_ids = ctx.request.body.users;
+    const user_set = new Set(user_ids);
+    const user_allowed = (id) => user_ids ? user_set.has(id) : true;
     const chapter = course_chapters.find((d) => d.id == chapter_id);
     const start_time = (new Date(chapter.start)) / 1000;
     const end_time = start_time + 86400 * 7;
@@ -865,6 +960,9 @@ APIPostRouters.get("/getProblemActivies", async ctx => {
     })).sort((a, b) => b.comment_count - a.comment_count);
 }).post("/getMostDiscussedKeywords", async ctx => {
     let chapter_id = ctx.request.body.chapter;
+    const user_ids = ctx.request.body.users;
+    const user_set = new Set(user_ids);
+    const user_allowed = (id) => user_ids ? user_set.has(id) : true;
     const chapter = course_chapters.find((d) => d.id == chapter_id);
     const start_time = (new Date(chapter.start)) / 1000;
     const end_time = start_time + 86400 * 7;
@@ -889,6 +987,9 @@ APIPostRouters.get("/getProblemActivies", async ctx => {
     ctx.body = words;
 }).post("/getMostUpvotedThreads", async ctx => {
     let chapter_id = ctx.request.body.chapter;
+    const user_ids = ctx.request.body.users;
+    const user_set = new Set(user_ids);
+    const user_allowed = (id) => user_ids ? user_set.has(id) : true;
     const chapter = course_chapters.find((d) => d.id == chapter_id);
     const start_time = (new Date(chapter.start)) / 1000;
     const end_time = start_time + 86400 * 7;
@@ -906,6 +1007,9 @@ APIPostRouters.get("/getProblemActivies", async ctx => {
         }));
 }).post("/getTopQuestioners", async ctx => {
     let chapter_id = ctx.request.body.chapter;
+    const user_ids = ctx.request.body.users;
+    const user_set = new Set(user_ids);
+    const user_allowed = (id) => user_ids ? user_set.has(id) : true;
     const chapter = course_chapters.find((d) => d.id == chapter_id);
     const start_time = (new Date(chapter.start)) / 1000;
     const end_time = start_time + 86400 * 7;
@@ -959,6 +1063,9 @@ APIPostRouters.get("/getProblemActivies", async ctx => {
     ctx.body = { questioners, responders };
 }).post("/getChapterOperationSequence", async ctx => {
     let ret = [];
+    const user_ids = ctx.request.body.users;
+    const user_set = new Set(user_ids);
+    const user_allowed = (id) => user_ids ? user_set.has(id) : true;
     let chapter_id = ctx.request.body.chapter;
     const chapter = course_chapters.find((d) => d.id == chapter_id);
     const videos = course_modules.filter(d => 
@@ -971,6 +1078,7 @@ APIPostRouters.get("/getProblemActivies", async ctx => {
     let end_time = start_time + 86400 * 7;
     let users = await user_model.find(condition)
         .select("-_id user_id events");
+    users = users.filter(d => user_allowed(d.user_id));
     const records = {};
 
     const user_map = {};
@@ -1052,6 +1160,9 @@ APIPostRouters.get("/getProblemActivies", async ctx => {
     }
 }).post("/getAssignmentOperationSequence", async ctx => {
     let ret = [];
+    const user_ids = ctx.request.body.users;
+    const user_set = new Set(user_ids);
+    const user_allowed = (id) => user_ids ? user_set.has(id) : true;
     let problem_id = ctx.request.body.assignment;
     const chapter = course_chapters.find((d) => d.children.includes(problem_id));
     const videos = course_modules.filter(d => 
@@ -1064,6 +1175,7 @@ APIPostRouters.get("/getProblemActivies", async ctx => {
     let end_time = start_time + 86400 * 7;
     let users = await user_model.find(condition)
         .select("-_id user_id events");
+    users = users.filter(d => user_allowed(d.user_id));
     const records = {};
 
     const user_map = {};
@@ -1174,6 +1286,34 @@ APIPostRouters.get("/getProblemActivies", async ctx => {
         modules: ret,
         adj: adj,
     }
+}).post("/getUserDifficulties", async ctx => {
+    const userset = ctx.request.body.users;
+    let chapter_id = ctx.request.body.chapter;
+    const chapter = course_chapters.find((d) => d.id == chapter_id);
+    const users = [];
+    for (const uid of userset) {
+        const user = await user_model.findOne({ user_id: uid })
+        .slice('video_watch_times', [chapter.index, 1])
+        .slice('grades', [chapter.index, 1])
+        .select("level_of_education year_of_birth gender country");
+        if (!user) {
+            continue;
+        }
+        users.push({
+            time: user.video_watch_times[0],
+            grade: user.grades[0],
+            user_id: uid
+        });
+    }
+        
+    ctx.body = {
+        users: users,
+    };
+}).post("/saveStudentGroup", async ctx => {
+    const users = ctx.request.body.users;
+    const index = ctx.request.body.id;
+    id2users[index] = users;
+    ctx.body = true;
 });
 
 async function init() {
