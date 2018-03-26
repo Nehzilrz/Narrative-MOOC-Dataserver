@@ -7,6 +7,8 @@ const cors = require('koa2-cors');
 var bodyParser = require('koa-bodyparser');
 const stop_words = require('./stop_words').stop_words
 const Schema = mongoose.Schema;
+var Redis = require('ioredis');
+var redis = new Redis();
 
 const app = new Koa();
 
@@ -1328,6 +1330,28 @@ async function init() {
 init();
 app.use(cors());
 app.use(bodyParser());
+app.use(async (ctx, next) => {
+    let args = ctx.url;
+    if (ctx.method === 'POST') {
+        args += JSON.stringify(ctx.request.body);
+    } else if (ctx.method == "GET") {
+        args += JSON.stringify(ctx.query);
+    }
+    const ret = await redis.get(args);
+    if (ret) {
+        console.log(`Find ${ctx.url} in cache.`);
+        ctx.body = JSON.parse(ret);
+        return;
+    } else {
+        await next();
+        if (ctx.body) {
+            console.log(`Save ${ctx.url} into cache.`);
+            redis.set(args, JSON.stringify(ctx.body));
+        } else {
+            console.log(`Cannot parse the url.`);
+        }
+    }
+});
 app.use(ListRouters.routes());
 app.use(APIGetRouters.routes());
 app.use(APIPostRouters.routes());
