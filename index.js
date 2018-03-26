@@ -1175,6 +1175,7 @@ APIPostRouters.get("/getProblemActivies", async ctx => {
     let ret = [];
     const user_allowed = await getUserFilter(ctx.request.body.condition);
     let problem_id = ctx.request.body.assignment;
+    console.log(problem_id);
     const chapter = course_chapters.find((d) => d.children.includes(problem_id));
     const videos = course_modules.filter(d => 
         d.category == 'video' && chapter.children.includes(d.id)
@@ -1323,7 +1324,7 @@ APIPostRouters.get("/getProblemActivies", async ctx => {
 });
 
 async function init() {
-    course_modules = await module_model.find();
+    course_modules = (await module_model.find()).sort((a, b) => a.index - b.index);
     course_modules.forEach((d) => id_to_module[d.id] = d);
     course_chapters = course_modules.filter(d => d.category == 'chapter');
     total_user_number = await user_model.count();
@@ -1341,13 +1342,13 @@ app.use(async (ctx, next) => {
     }
     const ret = await redis.get(args);
     if (ret) {
-        console.log(`Find ${ctx.url} in cache.`);
+        console.log(`Find ${args} in cache.`);
         ctx.body = JSON.parse(ret);
         return;
     } else {
         await next();
         if (ctx.body) {
-            console.log(`Save ${ctx.url} into cache.`);
+            console.log(`Save ${args} into cache.`);
             redis.set(args, JSON.stringify(ctx.body));
         } else {
             console.log(`Cannot parse the url.`);
