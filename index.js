@@ -789,7 +789,7 @@ APIPostRouters.get("/getProblemActivies", async ctx => {
     }
     ctx.body = ret.sort((a, b) => a.id > b.id ? 1 : -1);
 }).post("/getUserBasicInfo", async ctx => {
-    const userset = ctx.request.body.condition;
+    const userset = await getUserIdSet(ctx.request.body.condition);
     const users = [];
     for (const uid of userset) {
         const user = await user_model.findOne({ user_id: uid }).select(
