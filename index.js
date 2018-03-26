@@ -92,6 +92,7 @@ const module_model = conn.model('modules', new Schema({
     showanswer: String,
     weight: Number,
     index: Number,
+    content: String,
     html5_sources: [String],
 }));
 
@@ -336,6 +337,7 @@ ListRouters.get("/getVideoList", async ctx => {
         ret.push({
             id: p.id,
             type: 'assignment',
+            content: p.content || '',
             name: p.display_name,
             index: p.index,
             max_attempts: p.max_attempts,
