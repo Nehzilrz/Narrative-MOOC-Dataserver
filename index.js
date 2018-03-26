@@ -42,7 +42,10 @@ const user_model = conn.model('users', new Schema({
     created: Number,
     status: String,
     country: String,
-    year_of_birth: String,
+    country_name: String,
+    continent: String,
+    city: String,
+    year_of_birth: Number,
     gender: String,
     consecutive_days_visit_count: String,
     level_of_education: String,
@@ -165,6 +168,44 @@ function array_smooth(vec) {
 const cachedVideoLogs = {};
 let total_user_number = 0;
 const id2users = [null];
+
+
+const user_id_set_cache = {};
+async function getUserIdSet(condition) {
+    const str_cond = JSON.stringify(condition);
+    if (user_id_set_cache[str_cond]) {
+        return user_id_set_cache[str_cond];
+    }
+    const ret = (await user_model.find(condition).select('-_id user_id'))
+        .map(d => d.user_id);
+    return user_id_set_cache[str_cond] = ret;
+}
+
+async function getUserSet(condition) {
+    if (Array.isArray(condition)) {
+        return condition;
+    }
+    else if (!condition || JSON.stringify(condition) == '{}') {
+        return [];
+    } else {
+        const user_ids = await getUserIdSet(condition);
+        return user_ids;
+    }
+}
+
+async function getUserFilter(condition) {
+    if (Array.isArray(condition)) {
+        const userset = new Set(condition);
+        return (x) => userset.has(x);
+    }
+    else if (!condition || JSON.stringify(condition) == '{}') {
+        return () => true;
+    } else {
+        const user_ids = await getUserIdSet(condition);
+        const userset = new Set(user_ids);
+        return (x) => userset.has(x);
+    }
+}
 
 async function getVideoLogs(videoId) {
     if (cachedVideoLogs[videoId] != null) {
@@ -385,11 +426,7 @@ APIPostRouters.get("/getProblemActivies", async ctx => {
     }));
 }).post("/getProblemsData", async ctx => {
     const problems = ctx.request.body.problems;
-    const users = ctx.request.body.users;
-    const user_ids = ctx.request.body.users;
-    const user_set = new Set(user_ids);
-    const user_allowed = (id) => user_ids ? user_set.has(id) : true;
-    let user_number = (users && users.length);
+    const user_allowed = await getUserFilter(ctx.request.body.condition);
     let chapter_id = ctx.request.body.chapter;
     const chapter = course_chapters.find((d) => d.id == chapter_id);
     const condition = {};
@@ -462,11 +499,7 @@ APIPostRouters.get("/getProblemActivies", async ctx => {
     ctx.body = ret;
 }).post("/getVideosData", async ctx => {
     const videos = ctx.request.body.videos;
-    const users = ctx.request.body.users;
-    const user_ids = ctx.request.body.users;
-    const user_set = new Set(user_ids);
-    const user_allowed = (id) => user_ids ? user_set.has(id) : true;
-    let user_number = (users && users.length);
+    const user_allowed = await getUserFilter(ctx.request.body.condition);
     let chapter_id = ctx.request.body.chapter;
     const chapter = course_chapters.find((d) => d.id == chapter_id);
     const condition = {};
@@ -528,9 +561,7 @@ APIPostRouters.get("/getProblemActivies", async ctx => {
     ctx.body = ret;
 }).post("/getVideoActiviesDistribution", async ctx => {
     let ret = [];
-    const user_ids = ctx.request.body.users;
-    const user_set = new Set(user_ids);
-    const user_allowed = (id) => user_ids ? user_set.has(id) : true;
+    const user_allowed = await getUserFilter(ctx.request.body.condition);
     let chapter_id = ctx.request.body.chapter;
     const chapter = course_chapters.find((d) => d.id == chapter_id);
     if (chapter) {
@@ -595,9 +626,7 @@ APIPostRouters.get("/getProblemActivies", async ctx => {
     ctx.body = ret.sort((a, b) => b.activeness - a.activeness);
 }).post("/getProblemGradesDistribution", async ctx => {
     let ret = [];
-    const user_ids = ctx.request.body.users;
-    const user_set = new Set(user_ids);
-    const user_allowed = (id) => user_ids ? user_set.has(id) : true;
+    const user_allowed = await getUserFilter(ctx.request.body.condition);
     let chapter_id = ctx.request.body.chapter;
     const chapter = course_chapters.find((d) => d.id == chapter_id);
     if (chapter) {
@@ -663,9 +692,7 @@ APIPostRouters.get("/getProblemActivies", async ctx => {
     ctx.body = ret.sort((a, b) => b.activeness - a.activeness);
 }).post("/getChapterVideosInfo", async ctx => {
     let ret = [];
-    const user_ids = ctx.request.body.users;
-    const user_set = new Set(user_ids);
-    const user_allowed = (id) => user_ids ? user_set.has(id) : true;
+    const user_allowed = await getUserFilter(ctx.request.body.condition);
     let chapter_id = ctx.request.body.chapter;
     const chapter = course_chapters.find((d) => d.id == chapter_id);
     const allvideos = course_modules.filter(d => d.category == 'video').map((d) => d.id);
@@ -714,9 +741,7 @@ APIPostRouters.get("/getProblemActivies", async ctx => {
     ctx.body = ret.sort((a, b) => a.id > b.id ? 1 : -1);
 }).post("/getChapterProblemsInfo", async ctx => {
     let ret = [];
-    const user_ids = ctx.request.body.users;
-    const user_set = new Set(user_ids);
-    const user_allowed = (id) => user_ids ? user_set.has(id) : true;
+    const user_allowed = await getUserFilter(ctx.request.body.condition);
     let chapter_id = ctx.request.body.chapter;
     const chapter = course_chapters.find((d) => d.id == chapter_id);
     const problems = course_modules.filter(d => 
@@ -762,11 +787,11 @@ APIPostRouters.get("/getProblemActivies", async ctx => {
     }
     ctx.body = ret.sort((a, b) => a.id > b.id ? 1 : -1);
 }).post("/getUserBasicInfo", async ctx => {
-    const userset = ctx.request.body.users;
+    const userset = ctx.request.body.condition;
     const users = [];
     for (const uid of userset) {
         const user = await user_model.findOne({ user_id: uid }).select(
-            "level_of_education year_of_birth gender country"
+            "level_of_education year_of_birth gender country_name"
         );
         if (!user) {
             continue;
@@ -776,7 +801,8 @@ APIPostRouters.get("/getProblemActivies", async ctx => {
             level_of_education: user.level_of_education,
             year_of_birth: user.year_of_birth,
             gender: user.gender,
-            country: user.country,
+            country: user.country_name,
+            continent: user.continent,
         });
     }
 
@@ -795,8 +821,8 @@ APIPostRouters.get("/getProblemActivies", async ctx => {
         other: 'Other',
     };
     var education_data = Object.keys(education_dict)
-        .map(d => ({ name: education_level_map[d] || '', val: education_dict[d] }))
-        .filter(d => d.name != "")
+        .filter(d => d != "")
+        .map(d => ({ name: d, val: education_dict[d] }))
         .sort((a, b) => b.val.length - a.val.length);
 
     var gender_dict = {};
@@ -810,9 +836,10 @@ APIPostRouters.get("/getProblemActivies", async ctx => {
         f: 'Female',
         m: 'Male',
     };
+
     var gender_data = Object.keys(gender_dict)
-        .map(d => ({ name: gender_map[d] || '', val: gender_dict[d] }))
-        .filter(d => d.name != "")
+        .filter(d => d != "")
+        .map(d => ({ name: d, val: gender_dict[d] }))
         .sort((a, b) => b.val.length - a.val.length);
     
     var age_dict = {};
@@ -826,7 +853,7 @@ APIPostRouters.get("/getProblemActivies", async ctx => {
     }
     var age_data = [0, 1, 2, 3, 4, 5]
         .map(d => ({
-            name: `${d * 10} - ` + (d == 5 ? '' : `${d * 10 + 10}`), 
+            name: d * 10, 
             val: age_dict[d] || []
         }));
         
@@ -838,9 +865,7 @@ APIPostRouters.get("/getProblemActivies", async ctx => {
     };
 }).post("/getForumThreadMostReplied", async ctx => {
     let chapter_id = ctx.request.body.chapter;
-    const user_ids = ctx.request.body.users;
-    const user_set = new Set(user_ids);
-    const user_allowed = (id) => user_ids ? user_set.has(id) : true;
+    const user_allowed = await getUserFilter(ctx.request.body.condition);
     const chapter = course_chapters.find((d) => d.id == chapter_id);
     const start_time = (new Date(chapter.start)) / 1000;
     const end_time = start_time + 86400 * 7;
@@ -849,9 +874,7 @@ APIPostRouters.get("/getProblemActivies", async ctx => {
     ctx.body = threads.slice(0, 3);
 }).post("/getForumUserMostActive", async ctx => {
     let chapter_id = ctx.request.body.chapter;
-    const user_ids = ctx.request.body.users;
-    const user_set = new Set(user_ids);
-    const user_allowed = (id) => user_ids ? user_set.has(id) : true;
+    const user_allowed = await getUserFilter(ctx.request.body.condition);
     const chapter = course_chapters.find((d) => d.id == chapter_id);
     const start_time = (new Date(chapter.start)) / 1000;
     const end_time = start_time + 86400 * 7;
@@ -866,9 +889,7 @@ APIPostRouters.get("/getProblemActivies", async ctx => {
     ctx.body = users;
 }).post("/getForumThreadProblemRelated", async ctx => {
     let chapter_id = ctx.request.body.chapter;
-    const user_ids = ctx.request.body.users;
-    const user_set = new Set(user_ids);
-    const user_allowed = (id) => user_ids ? user_set.has(id) : true;
+    const user_allowed = await getUserFilter(ctx.request.body.condition);
     const chapter = course_chapters.find((d) => d.id == chapter_id);
     const start_time = (new Date(chapter.start)) / 1000;
     const end_time = start_time + 86400 * 7;
@@ -898,9 +919,7 @@ APIPostRouters.get("/getProblemActivies", async ctx => {
     ctx.body = ret;
 }).post("/getForumThreadVideoRelated", async ctx => {
     let chapter_id = ctx.request.body.chapter;
-    const user_ids = ctx.request.body.users;
-    const user_set = new Set(user_ids);
-    const user_allowed = (id) => user_ids ? user_set.has(id) : true;
+    const user_allowed = await getUserFilter(ctx.request.body.condition);
     const chapter = course_chapters.find((d) => d.id == chapter_id);
     const start_time = (new Date(chapter.start)) / 1000;
     const end_time = start_time + 86400 * 7;
@@ -930,9 +949,7 @@ APIPostRouters.get("/getProblemActivies", async ctx => {
     ctx.body = ret;
 }).post("/getMostDiscussedThreads", async ctx => {
     let chapter_id = ctx.request.body.chapter;
-    const user_ids = ctx.request.body.users;
-    const user_set = new Set(user_ids);
-    const user_allowed = (id) => user_ids ? user_set.has(id) : true;
+    const user_allowed = await getUserFilter(ctx.request.body.condition);
     const chapter = course_chapters.find((d) => d.id == chapter_id);
     const start_time = (new Date(chapter.start)) / 1000;
     const end_time = start_time + 86400 * 7;
@@ -960,9 +977,7 @@ APIPostRouters.get("/getProblemActivies", async ctx => {
     })).sort((a, b) => b.comment_count - a.comment_count);
 }).post("/getMostDiscussedKeywords", async ctx => {
     let chapter_id = ctx.request.body.chapter;
-    const user_ids = ctx.request.body.users;
-    const user_set = new Set(user_ids);
-    const user_allowed = (id) => user_ids ? user_set.has(id) : true;
+    const user_allowed = await getUserFilter(ctx.request.body.condition);
     const chapter = course_chapters.find((d) => d.id == chapter_id);
     const start_time = (new Date(chapter.start)) / 1000;
     const end_time = start_time + 86400 * 7;
@@ -987,9 +1002,7 @@ APIPostRouters.get("/getProblemActivies", async ctx => {
     ctx.body = words;
 }).post("/getMostUpvotedThreads", async ctx => {
     let chapter_id = ctx.request.body.chapter;
-    const user_ids = ctx.request.body.users;
-    const user_set = new Set(user_ids);
-    const user_allowed = (id) => user_ids ? user_set.has(id) : true;
+    const user_allowed = await getUserFilter(ctx.request.body.condition);
     const chapter = course_chapters.find((d) => d.id == chapter_id);
     const start_time = (new Date(chapter.start)) / 1000;
     const end_time = start_time + 86400 * 7;
@@ -1007,9 +1020,7 @@ APIPostRouters.get("/getProblemActivies", async ctx => {
         }));
 }).post("/getTopQuestioners", async ctx => {
     let chapter_id = ctx.request.body.chapter;
-    const user_ids = ctx.request.body.users;
-    const user_set = new Set(user_ids);
-    const user_allowed = (id) => user_ids ? user_set.has(id) : true;
+    const user_allowed = await getUserFilter(ctx.request.body.condition);
     const chapter = course_chapters.find((d) => d.id == chapter_id);
     const start_time = (new Date(chapter.start)) / 1000;
     const end_time = start_time + 86400 * 7;
@@ -1063,9 +1074,7 @@ APIPostRouters.get("/getProblemActivies", async ctx => {
     ctx.body = { questioners, responders };
 }).post("/getChapterOperationSequence", async ctx => {
     let ret = [];
-    const user_ids = ctx.request.body.users;
-    const user_set = new Set(user_ids);
-    const user_allowed = (id) => user_ids ? user_set.has(id) : true;
+    const user_allowed = await getUserFilter(ctx.request.body.condition);
     let chapter_id = ctx.request.body.chapter;
     const chapter = course_chapters.find((d) => d.id == chapter_id);
     const videos = course_modules.filter(d => 
@@ -1160,9 +1169,7 @@ APIPostRouters.get("/getProblemActivies", async ctx => {
     }
 }).post("/getAssignmentOperationSequence", async ctx => {
     let ret = [];
-    const user_ids = ctx.request.body.users;
-    const user_set = new Set(user_ids);
-    const user_allowed = (id) => user_ids ? user_set.has(id) : true;
+    const user_allowed = await getUserFilter(ctx.request.body.condition);
     let problem_id = ctx.request.body.assignment;
     const chapter = course_chapters.find((d) => d.children.includes(problem_id));
     const videos = course_modules.filter(d => 
@@ -1309,11 +1316,6 @@ APIPostRouters.get("/getProblemActivies", async ctx => {
     ctx.body = {
         users: users,
     };
-}).post("/saveStudentGroup", async ctx => {
-    const users = ctx.request.body.users;
-    const index = ctx.request.body.id;
-    id2users[index] = users;
-    ctx.body = true;
 });
 
 async function init() {
