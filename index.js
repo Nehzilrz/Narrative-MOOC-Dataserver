@@ -1,15 +1,15 @@
 const Koa = require('koa');
-const Router = require('koa-router')
+const Router = require('koa-router');
 const mongoose = require('mongoose');
 const dbUrl = 'mongodb://localhost/NarrativeMOOCintroduceToJava';
 const dbUrl2 = 'mongodb://localhost/vismooc';
 const cors = require('koa2-cors');
 var bodyParser = require('koa-bodyparser');
-const stop_words = require('./stop_words').stop_words
-const Schema = mongoose.Schema;
+const stop_words = require('./stop_words').stop_words;
 var Redis = require('ioredis');
-var redis = new Redis();
+const Schema = mongoose.Schema;
 
+var redis = new Redis();
 const app = new Koa();
 
 const conn = mongoose.createConnection(dbUrl, {
@@ -45,6 +45,7 @@ const user_model = conn.model('users', new Schema({
     status: String,
     country: String,
     country_name: String,
+    country_code3: String,
     continent: String,
     city: String,
     year_of_birth: Number,
@@ -174,6 +175,7 @@ const id2users = [null];
 
 
 const user_id_set_cache = {};
+const user_set_cache = {};
 async function getUserIdSet(condition) {
     const str_cond = JSON.stringify(condition);
     if (user_id_set_cache[str_cond]) {
@@ -184,12 +186,59 @@ async function getUserIdSet(condition) {
     return user_id_set_cache[str_cond] = ret;
 }
 
+/*
+user_id: String,
+username: String,
+name: String,
+first_name: String,
+last_name: String,
+is_staff: Number,
+is_active: Number,
+is_superuser: Number,
+last_login: Number,
+date_joined: Number,
+created_date: Number,
+modified_date: Number,
+created: Number,
+status: String,
+country: String,
+country_name: String,
+continent: String,
+city: String,
+year_of_birth: Number,
+gender: String,
+consecutive_days_visit_count: String,
+level_of_education: String,
+certificate_id: String,
+grade: Number,
+course_id: String,
+mode: String,
+grades: [Number],
+video_watch_times: [Number],
+*/
+async function getUsers(condition, chapter = null) {
+    condition = condition || {};
+    const str_cond = JSON.stringify(condition);
+    if (user_set_cache[str_cond]) {
+        return user_set_cache[str_cond];
+    }
+    let selector = '-_id country_name year_of_birth continent mode gender grade level_of_education last_login';
+    let query = user_model.find(condition).select(selector);
+    if (chapter) {
+        query = query
+            .slice('video_watch_times', [chapter.index, 1])
+            .slice('grades', [chapter.index, 1]);
+    }
+    const ret = await query;
+    return user_set_cache[str_cond] = ret;
+}
+
 async function getUserSet(condition) {
     if (Array.isArray(condition)) {
         return condition;
     }
     else if (!condition || JSON.stringify(condition) == '{}') {
-        return [];
+        return await getUserIdSet({});
     } else {
         const user_ids = await getUserIdSet(condition);
         return user_ids;
@@ -791,82 +840,75 @@ APIPostRouters.get("/getProblemActivies", async ctx => {
     }
     ctx.body = ret.sort((a, b) => a.id > b.id ? 1 : -1);
 }).post("/getUserBasicInfo", async ctx => {
-    const userset = await getUserIdSet(ctx.request.body.condition);
-    const users = [];
-    for (const uid of userset) {
-        const user = await user_model.findOne({ user_id: uid }).select(
-            "level_of_education year_of_birth gender country_name"
-        );
-        if (!user) {
-            continue;
+    let users = [];
+    let chapter_id = ctx.request.body.chapter;
+    const chapter = course_chapters.find((d) => d.id == chapter_id);
+    if (!chapter) return;
+    const chapter_start = (+new Date(chapter.start)) / 1000;
+    const chapter_end = chapter_start + 86400 * 7;
+    let condition = ctx.request.body.condition;
+    if (Array.isArray(condition)) {
+        for (const uid of condition) {
+            const user = await user_model.findOne({ user_id: uid }).select(
+                "-_id country_name year_of_birth continent mode gender grade level_of_education last_login"
+            );
+            if (!user) {
+                continue;
+            }
+            users.push(user);
         }
-        users.push({
-            user_id: uid,
-            level_of_education: user.level_of_education,
-            year_of_birth: user.year_of_birth,
-            gender: user.gender,
-            country: user.country_name,
-            continent: user.continent,
-        });
+    } else {
+        condition = condition || {};
+        condition[`video_watch_times.${chapter.index}`] = {$gt: 0};
+        users = await getUsers(condition);
     }
 
-    var education_dict = {};
-    for (const user of users) {
-        if (!education_dict[user.level_of_education]) {
-            education_dict[user.level_of_education] = [];
-        }
-        education_dict[user.level_of_education].push(user.user_id);
-    }
-    var education_level_map = {
-        hs: 'High School',
-        a: 'Adult',
-        b: 'Bachelor',
-        m: 'Master or Above',
-        other: 'Other',
-    };
-    var education_data = Object.keys(education_dict)
-        .filter(d => d != "")
-        .map(d => ({ name: d, val: education_dict[d] }))
-        .sort((a, b) => b.val.length - a.val.length);
+    // country_name year_of_birth continent mode gender
+    // grade level_of_education last_login
+    const s_dimensions = ['country_name', 'continent', 'mode','gender', 'level_of_education'];
+    const i_dimensions = ['grade', 'drop', 'age'];
+    const count = {};
+    s_dimensions.forEach(d => count[d] = {});
+    i_dimensions.forEach(d => count[d] = {});
+    count['_grade'] = {};
+    count['_age'] = {};
 
-    var gender_dict = {};
     for (const user of users) {
-        if (!gender_dict[user.gender]) {
-            gender_dict[user.gender] = [];
+        let val;
+        for (const d of s_dimensions) {
+            val = user[d] || '';
+            if (!count[d][val]) count[d][val] = 0;
+            count[d][val] += 1;
         }
-        gender_dict[user.gender].push(user.user_id);
-    }
-    var gender_map = {
-        f: 'Female',
-        m: 'Male',
-    };
+        val = ~~(user.grade * 100);
+        if (!count['_grade'][val]) count['_grade'][val] = 0;
+        count['_grade'][val] += 1;
+        val = Math.ceil(val / 10);
+        if (!count['grade'][val]) count['grade'][val] = 0;
+        count['grade'][val] += 1;
 
-    var gender_data = Object.keys(gender_dict)
-        .filter(d => d != "")
-        .map(d => ({ name: d, val: gender_dict[d] }))
-        .sort((a, b) => b.val.length - a.val.length);
-    
-    var age_dict = {};
-    for (const user of users) {
-        var i = ~~((2014 - (+user.year_of_birth)) / 10);
-        if (i > 5) i = 5;
-        if (!age_dict[i]) {
-            age_dict[i] = [];
-        }
-        age_dict[i].push(user.user_id);
+        val = 2014 - (+user.year_of_birth);
+        if (user.year_of_birth == '') val = 0;
+        if (!count['_age'][val]) count['_age'][val] = 0;
+        count['_age'][val] += 1;
+        val = Math.ceil(val / 10);
+        if (!count['age'][val]) count['age'][val] = 0;
+        count['age'][val] += 1;
+
+        val = user.last_login > chapter_end ? 'continue': 'drop';
+        if (!count['drop'][val]) count['drop'][val] = 0;
+        count['drop'][val] += 1;
     }
-    var age_data = [0, 1, 2, 3, 4, 5]
-        .map(d => ({
-            name: d * 10, 
-            val: age_dict[d] || []
-        }));
-        
-    ctx.body = {
-        age: age_data,
-        gender: gender_data,
-        education: education_data,
-        users: users,
-    };
+
+    ctx.body = Object.keys(count).map(key => ({
+        key: key,
+        val: Object.keys(count[key])
+        .sort((a, b) => a < b ? -1 : 1)
+        .map(name => 
+            ({ name, val: count[key][name] })
+        ),
+        n: Object.values(count[key]).reduce((a, b) => a + b, 0),
+    }));
 }).post("/getForumThreadMostReplied", async ctx => {
     let chapter_id = ctx.request.body.chapter;
     const user_allowed = await getUserFilter(ctx.request.body.condition);
@@ -1333,6 +1375,7 @@ async function init() {
 init();
 app.use(cors());
 app.use(bodyParser());
+/*
 app.use(async (ctx, next) => {
     let args = ctx.url;
     if (ctx.method === 'POST') {
@@ -1355,6 +1398,7 @@ app.use(async (ctx, next) => {
         }
     }
 });
+*/
 app.use(ListRouters.routes());
 app.use(APIGetRouters.routes());
 app.use(APIPostRouters.routes());

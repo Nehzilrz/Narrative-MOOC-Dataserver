@@ -13,9 +13,7 @@
     "koa": "^2.4.1",
     "koa-bodyparser": "^4.2.0",
     "koa-router": "^7.3.0",
-    "koa2": "^2.0.0-alpha.7",
     "koa2-cors": "^2.0.5",
-    "mongoose": "^4.13.9",
-    "xtend": "^4.0.1"
+    "mongoose": "^4.13.9"
   }
 }
