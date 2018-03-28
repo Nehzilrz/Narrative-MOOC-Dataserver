@@ -222,7 +222,7 @@ async function getUsers(condition, chapter = null) {
     if (user_set_cache[str_cond]) {
         return user_set_cache[str_cond];
     }
-    let selector = '-_id country_name year_of_birth continent mode gender grade level_of_education last_login';
+    let selector = '-_id user_id country_name year_of_birth continent mode gender grade level_of_education last_login';
     let query = user_model.find(condition).select(selector);
     if (chapter) {
         query = query
@@ -860,7 +860,7 @@ APIPostRouters.get("/getProblemActivies", async ctx => {
     } else {
         condition = condition || {};
         condition[`video_watch_times.${chapter.index}`] = {$gt: 0};
-        users = await getUsers(condition);
+        users = await getUsers(condition, chapter);
     }
 
     // country_name year_of_birth continent mode gender
@@ -1341,28 +1341,34 @@ APIPostRouters.get("/getProblemActivies", async ctx => {
         adj: adj,
     }
 }).post("/getUserDifficulties", async ctx => {
-    const userset = ctx.request.body.users;
+    let users = [];
     let chapter_id = ctx.request.body.chapter;
     const chapter = course_chapters.find((d) => d.id == chapter_id);
-    const users = [];
-    for (const uid of userset) {
-        const user = await user_model.findOne({ user_id: uid })
-        .slice('video_watch_times', [chapter.index, 1])
-        .slice('grades', [chapter.index, 1])
-        .select("level_of_education year_of_birth gender country");
-        if (!user) {
-            continue;
+    if (!chapter) return;
+    const chapter_start = (+new Date(chapter.start)) / 1000;
+    const chapter_end = chapter_start + 86400 * 7;
+    let condition = ctx.request.body.condition;
+    if (Array.isArray(condition)) {
+        for (const uid of condition) {
+            const user = await user_model.findOne({ user_id: uid }).select(
+                "-_id country_name year_of_birth continent mode gender grade level_of_education last_login"
+            );
+            if (!user) {
+                continue;
+            }
+            users.push(user);
         }
-        users.push({
-            time: user.video_watch_times[0],
-            grade: user.grades[0],
-            user_id: uid
-        });
+    } else {
+        condition = condition || {};
+        condition[`video_watch_times.${chapter.index}`] = {$gt: 0};
+        users = await getUsers(condition, chapter);
     }
-        
-    ctx.body = {
-        users: users,
-    };
+
+    ctx.body = users.map(user => ({
+        time: user.video_watch_times[0],
+        grade: user.grades[0],
+        final: user.grade,
+    }));
 });
 
 async function init() {
