@@ -1,7 +1,8 @@
 const Koa = require('koa');
 const Router = require('koa-router');
 const mongoose = require('mongoose');
-const dbUrl = 'mongodb://localhost/NarrativeMOOCintroduceToJava';
+// const dbUrl = 'mongodb://localhost/NarrativeMOOCintroduceToJava';
+const dbUrl = 'mongodb://localhost/NarrativeMOOCEBA20161T';
 const dbUrl2 = 'mongodb://localhost/vismooc';
 const cors = require('koa2-cors');
 var bodyParser = require('koa-bodyparser');
@@ -387,13 +388,13 @@ ListRouters.get("/getVideoList", async ctx => {
             id: p.id,
             type: 'assignment',
             content: p.content || '',
-            name: p.display_name,
+            name: p.display_name || p.content,
             index: p.index,
-            max_attempts: p.max_attempts,
-            showanswer: p.showanswer,
+            max_attempts: p.max_attempts || 1,
+            showanswer: p.showanswer || true,
             submission_wait_seconds: p.submission_wait_seconds,
-            chapter_name: currentChapter.display_name,
-            chapter_start: +(new Date(currentChapter.start)) || 1e11,
+            chapter_name: currentChapter && currentChapter.display_name,
+            chapter_start: (currentChapter && +(new Date(currentChapter.start))) || 1e11,
             weight: p.weight,
         });
     }
@@ -1403,8 +1404,8 @@ app.use(async (ctx, next) => {
             console.log(`Cannot parse the url.`);
         }
     }
-});
-*/
+});*/
+
 app.use(ListRouters.routes());
 app.use(APIGetRouters.routes());
 app.use(APIPostRouters.routes());
