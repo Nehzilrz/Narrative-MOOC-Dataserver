@@ -1,8 +1,8 @@
 const Koa = require('koa');
 const Router = require('koa-router');
 const mongoose = require('mongoose');
-// const dbUrl = 'mongodb://localhost/NarrativeMOOCintroduceToJava';
-const dbUrl = 'mongodb://localhost/NarrativeMOOCEBA20161T';
+const dbUrl = 'mongodb://localhost/NarrativeMOOCintroduceToJava';
+// const dbUrl = 'mongodb://localhost/NarrativeMOOCEBA20161T';
 const dbUrl2 = 'mongodb://localhost/vismooc';
 const cors = require('koa2-cors');
 var bodyParser = require('koa-bodyparser');
@@ -43,6 +43,8 @@ const user_model = conn.model('users', new Schema({
     created_date: Number,
     modified_date: Number,
     created: Number,
+    questions: Number,
+    responses: Number,
     status: String,
     country: String,
     country_name: String,
@@ -866,7 +868,7 @@ APIPostRouters.get("/getProblemActivies", async ctx => {
 
     // country_name year_of_birth continent mode gender
     // grade level_of_education last_login
-    const s_dimensions = ['country_name', 'continent', 'mode','gender', 'level_of_education'];
+    const s_dimensions = ['country_name', 'continent', 'mode', 'gender', 'level_of_education'];
     const i_dimensions = ['grade', 'drop', 'age'];
     const count = {};
     s_dimensions.forEach(d => count[d] = {});
@@ -884,7 +886,7 @@ APIPostRouters.get("/getProblemActivies", async ctx => {
         val = ~~(user.grade * 100);
         if (!count['_grade'][val]) count['_grade'][val] = 0;
         count['_grade'][val] += 1;
-        val = Math.ceil(val / 10);
+        val = ~~(user.grade * 9.9)
         if (!count['grade'][val]) count['grade'][val] = 0;
         count['grade'][val] += 1;
 
@@ -910,6 +912,30 @@ APIPostRouters.get("/getProblemActivies", async ctx => {
         ),
         n: Object.values(count[key]).reduce((a, b) => a + b, 0),
     }));
+}).post("/getUserNumber", async ctx => {
+    let users = [];
+    let chapter_id = ctx.request.body.chapter;
+    const chapter = course_chapters.find((d) => d.id == chapter_id);
+    if (!chapter) return;
+    const chapter_start = (+new Date(chapter.start)) / 1000;
+    const chapter_end = chapter_start + 86400 * 7;
+    let condition = ctx.request.body.condition;
+    if (Array.isArray(condition)) {
+        for (const uid of condition) {
+            const user = await user_model.findOne({ user_id: uid }).select(
+                "-_id country_name year_of_birth continent mode gender grade level_of_education last_login"
+            );
+            if (!user) {
+                continue;
+            }
+            users.push(user);
+        }
+    } else {
+        condition = condition || {};
+        condition[`video_watch_times.${chapter.index}`] = {$gt: 0};
+        users = await getUsers(condition, chapter);
+    }
+    ctx.body = users.length;
 }).post("/getForumThreadMostReplied", async ctx => {
     let chapter_id = ctx.request.body.chapter;
     const user_allowed = await getUserFilter(ctx.request.body.condition);
@@ -918,7 +944,7 @@ APIPostRouters.get("/getProblemActivies", async ctx => {
     const end_time = start_time + 86400 * 7;
     let threads = await forum_thread_model.find({ created: { $gt: start_time, $lt: end_time }});
     threads = threads.sort((a, b) => b.comment_count - a.comment_count);
-    ctx.body = threads.slice(0, 3);
+    ctx.body = threads;
 }).post("/getForumUserMostActive", async ctx => {
     let chapter_id = ctx.request.body.chapter;
     const user_allowed = await getUserFilter(ctx.request.body.condition);
@@ -1071,11 +1097,13 @@ APIPostRouters.get("/getProblemActivies", async ctx => {
     const chapter = course_chapters.find((d) => d.id == chapter_id);
     const start_time = (new Date(chapter.start)) / 1000;
     const end_time = start_time + 86400 * 7;
+
     const threads = (await forum_thread_model.find({ 
         created: { $gt: start_time, $lt: end_time }
     }));
     const questioner_count = {};
     const responder_count = {};
+
     for (const thread of threads) {
         if (thread.floor1) {
             if (!questioner_count[thread.user_id]) {
@@ -1101,8 +1129,7 @@ APIPostRouters.get("/getProblemActivies", async ctx => {
                 body: e.body
             })),
         }))
-        .sort((a, b) => b.val - a.val)
-        .slice(0, 3);
+        .sort((a, b) => b.val - a.val);
 
     const responders = Object.keys(responder_count)
         .map(d => ({
@@ -1115,10 +1142,63 @@ APIPostRouters.get("/getProblemActivies", async ctx => {
                 body: e.body
             })),
         }))
-        .sort((a, b) => b.val - a.val)
-        .slice(0, 3);
-    
-    ctx.body = { questioners, responders };
+        .sort((a, b) => b.val - a.val);
+
+    let max_value = Math.max(...questioners.map(d => d.val));
+    let scales = Math.min(10, max_value);
+    let questioners_count = [];
+    for (let i = 0; i < scales; ++i) {
+        const lo = ~~(i / scales * max_value) + 1;
+        const hi = ~~((i + 1) / scales * max_value);
+        questioners_count[i] = {
+            name: lo == hi ? `${lo}`: `${lo} - ${hi}`,
+            val: 0,
+            users: [],
+        };
+    }
+    for (const x of questioners) {
+        const i = ~~((x.val - 1) * scales / max_value);
+        questioners_count[i].val++;
+        questioners_count[i].users.push(x.user_id);
+    }
+
+
+    max_value = Math.max(...responders.map(d => d.val));
+    scales = Math.min(10, max_value);
+    let responders_count = [];
+    for (let i = 0; i < scales; ++i) {
+        const lo = ~~(i / scales * max_value) + 1;
+        const hi = ~~((i + 1) / scales * max_value);
+        responders_count[i] = {
+            name: lo == hi ? `${lo}`: `${lo} - ${hi}`,
+            val: 0,
+            users: [],
+        };
+    }
+    for (const x of responders) {
+        const i = ~~((x.val - 1) * scales / max_value);
+        responders_count[i].val++;
+        responders_count[i].users.push(x.user_id);
+    }
+/*
+    for (const d of questioners) {
+        await user_model.update({ user_id: d.user_id },
+            { $set: { questions: d.val }
+        });
+    }
+
+    for (const d of responders) {
+        await user_model.update({ user_id: d.user_id },
+            { $set: { responses: d.val }
+        });
+    }
+*/
+    ctx.body = {
+        questioners: questioners.slice(0, 3),
+        responders:  responders.slice(0, 3),
+        questioners_count,
+        responders_count,
+    };
 }).post("/getChapterOperationSequence", async ctx => {
     let ret = [];
     const user_allowed = await getUserFilter(ctx.request.body.condition);
